@@ -1,0 +1,45 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: dfe1a4368a0940649b00ae86882d6325, type: 3}
+  m_Name: MainIAPCatalog
+  m_EditorClassIdentifier: UnityStoreKit::UnityStoreKit.IAPCatalog
+  products:
+  - internalId: removead
+    storeId: 9N4HFXJ46QGF
+    productType: 1
+    mockTitle: Remove Ads
+    mockDescription: Remove all third-party advertisements permanently.
+    mockPrice: $0.99
+  - internalId: coins100
+    storeId: 9N9MQZS2C9L5
+    productType: 0
+    mockTitle: 100 Gold Coins
+    mockDescription: A handful of shining gold coins.
+    mockPrice: $1.99
+  - internalId: coins500
+    storeId: 9NHQTZX5SK33
+    productType: 0
+    mockTitle: 500 Gold Coins
+    mockDescription: A medium stack of shining gold coins.
+    mockPrice: $4.99
+  - internalId: coins1000
+    storeId: 9NKLBS7PGHVF
+    productType: 0
+    mockTitle: 1000 Gold Coins
+    mockDescription: A massive chest of glowing gold coins.
+    mockPrice: $9.99
+  - internalId: monthsub
+    storeId: 9P4860L2WKTP
+    productType: 2
+    mockTitle: Monthly Subscription
+    mockDescription: Unlock premium features for 1 month.
+    mockPrice: $2.99/mo

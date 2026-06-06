@@ -1,0 +1,18 @@
+{
+  "name": "com.maxjoygames.unitystorekit",
+  "version": "1.0.0",
+  "displayName": "Unity Store Kit",
+  "description": "Native Windows Store (UWP) In-App Purchase integration for Unity",
+  "unity": "2021.3",
+  "author": {
+    "name": "maxjoygames"
+  },
+  "dependencies": {},
+  "samples": [
+    {
+      "displayName": "IAP Demo Scene & UI",
+      "description": "A complete interactive UI mock billing simulator and native Windows Store purchase example.",
+      "path": "Samples~/Demo"
+    }
+  ]
+}
