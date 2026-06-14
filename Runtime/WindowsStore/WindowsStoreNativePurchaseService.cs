@@ -65,26 +65,74 @@ namespace UnityStoreKit
                     return;
                 }
 
-                // Query application license to retrieve active durable purchases (Add-ons)
+                // 异步获取应用授权证书
                 Debug.Log("[WindowsStore] Requesting App License...");
-                appLicense = await storeContext.GetAppLicenseAsync();
+                var license = await storeContext.GetAppLicenseAsync();
 
-                // Load product catalog metadata (prices, localized titles, etc.)
-                await LoadProductsAsync();
+                // 异步加载商品目录元数据
+                string[] productKinds = { "Durable", "Consumable", "UnmanagedConsumable" };
+                List<string> filterList = new List<string>(productKinds);
+                Debug.Log("[WindowsStore] Fetching associated products metadata from Microsoft Store...");
+                var queryResult = await storeContext.GetAssociatedStoreProductsAsync(filterList);
 
-                // Refresh owned licenses list (called after catalog loaded to update ownership and expiration details)
-                RefreshOwnedLicenses(appLicense);
+                // 在主线程更新所有商品目录状态并刷新拥有商品列表
+                RunOnAppThread(() =>
+                {
+                    appLicense = license;
+                    storeProductInfos.Clear();
+
+                    if (queryResult != null && queryResult.ExtendedError == null)
+                    {
+                        Debug.Log($"[WindowsStore] Found {queryResult.Products.Count} associated products in Store catalog.");
+                        foreach (var pair in queryResult.Products)
+                        {
+                            var storeProduct = pair.Value;
+                            if (storeProduct == null) continue;
+
+                            string internalId = ToInternalProductId(storeProduct.StoreId);
+                            var info = new WindowsStoreProductInfo
+                            {
+                                InternalProductId = internalId,
+                                WindowsStoreProductId = storeProduct.StoreId,
+                                Title = storeProduct.Title,
+                                Description = storeProduct.Description,
+                                FormattedPrice = storeProduct.Price?.FormattedPrice ?? "N/A",
+                                IsOwned = false,
+                                ProductKind = storeProduct.ProductKind
+                            };
+
+                            storeProductInfos.Add(info);
+                            Debug.Log($"[WindowsStore] Catalog loaded: {info.InternalProductId} -> Title: {info.Title}, Price: {info.FormattedPrice}, Owned: {info.IsOwned}");
+                        }
+                    }
+                    else if (queryResult?.ExtendedError != null)
+                    {
+                        Debug.LogError($"[WindowsStore] Catalog query failed: {queryResult.ExtendedError.Message}");
+                    }
+
+                    // 刷新拥有列表
+                    RefreshOwnedLicenses(appLicense);
+
+                    // 触发商品目录加载完毕事件
+                    OnProductsLoaded?.Invoke();
+                });
 
                 // 异步核销和补发应用商店中未正常履行的消耗型漏单商品
                 await RecoverUnconsumedConsumablesAsync();
 
-                IsInitialized = true;
-                Debug.Log("[WindowsStore] Native Store successfully initialized.");
+                RunOnAppThread(() =>
+                {
+                    IsInitialized = true;
+                    Debug.Log("[WindowsStore] Native Store successfully initialized.");
+                });
             }
             catch (Exception ex)
             {
-                IsInitialized = false;
-                Debug.LogError($"[WindowsStore] Native initialization encountered an exception: {ex}");
+                RunOnAppThread(() =>
+                {
+                    IsInitialized = false;
+                    Debug.LogError($"[WindowsStore] Native initialization encountered an exception: {ex}");
+                });
             }
         }
 
@@ -112,8 +160,11 @@ namespace UnityStoreKit
                 
                 if (result == null)
                 {
-                    Debug.LogError($"[WindowsStore] RequestPurchaseAsync returned null for product {windowsStoreProductId}.");
-                    OnPurchaseFailed?.Invoke(productId, "Purchase request returned no response.");
+                    RunOnAppThread(() =>
+                    {
+                        Debug.LogError($"[WindowsStore] RequestPurchaseAsync returned null for product {windowsStoreProductId}.");
+                        OnPurchaseFailed?.Invoke(productId, "Purchase request returned no response.");
+                    });
                     return;
                 }
 
@@ -123,29 +174,32 @@ namespace UnityStoreKit
                 {
                     case StorePurchaseStatus.Succeeded:
                         await HandleConsumableFulfillmentIfNeeded(productId, windowsStoreProductId);
-                        OnPurchaseSucceeded?.Invoke(productId);
+                        RunOnAppThread(() => OnPurchaseSucceeded?.Invoke(productId));
                         break;
 
                     case StorePurchaseStatus.AlreadyPurchased:
                         await HandleConsumableFulfillmentIfNeeded(productId, windowsStoreProductId);
-                        Debug.Log($"[WindowsStore] Product {productId} is already owned. Resolving as success.");
-                        OnPurchaseSucceeded?.Invoke(productId);
+                        RunOnAppThread(() =>
+                        {
+                            Debug.Log($"[WindowsStore] Product {productId} is already owned. Resolving as success.");
+                            OnPurchaseSucceeded?.Invoke(productId);
+                        });
                         break;
 
                     case StorePurchaseStatus.NotPurchased:
-                        OnPurchaseFailed?.Invoke(productId, "User canceled or did not complete purchase.");
+                        RunOnAppThread(() => OnPurchaseFailed?.Invoke(productId, "User canceled or did not complete purchase."));
                         break;
 
                     case StorePurchaseStatus.NetworkError:
-                        OnPurchaseFailed?.Invoke(productId, "Purchase failed due to network error.");
+                        RunOnAppThread(() => OnPurchaseFailed?.Invoke(productId, "Purchase failed due to network error."));
                         break;
 
                     case StorePurchaseStatus.ServerError:
-                        OnPurchaseFailed?.Invoke(productId, "Purchase failed due to Microsoft Store server error.");
+                        RunOnAppThread(() => OnPurchaseFailed?.Invoke(productId, "Purchase failed due to Microsoft Store server error."));
                         break;
 
                     default:
-                        OnPurchasePendingOrUnknown?.Invoke(productId, result.Status.ToString());
+                        RunOnAppThread(() => OnPurchasePendingOrUnknown?.Invoke(productId, result.Status.ToString()));
                         break;
                 }
 
@@ -156,8 +210,11 @@ namespace UnityStoreKit
             }
             catch (Exception ex)
             {
-                Debug.LogError($"[WindowsStore] Purchase exception occurred: {ex}");
-                OnPurchaseFailed?.Invoke(productId, $"Purchase exception: {ex.Message}");
+                RunOnAppThread(() =>
+                {
+                    Debug.LogError($"[WindowsStore] Purchase exception occurred: {ex}");
+                    OnPurchaseFailed?.Invoke(productId, $"Purchase exception: {ex.Message}");
+                });
             }
         }
 
@@ -177,30 +234,38 @@ namespace UnityStoreKit
             try
             {
                 // 重新异步向微软服务器请求获取最新的应用程序授权证书
-                appLicense = await storeContext.GetAppLicenseAsync();
-                RefreshOwnedLicenses(appLicense);
-
-                int restoredCount = 0;
-                foreach (var pair in ownedProducts)
+                var license = await storeContext.GetAppLicenseAsync();
+                
+                RunOnAppThread(() =>
                 {
-                    if (pair.Value)
-                    {
-                        // 消耗型商品不需要恢复
-                        if (IsProductConsumable(pair.Key))
-                        {
-                            continue;
-                        }
+                    appLicense = license;
+                    RefreshOwnedLicenses(appLicense);
 
-                        Debug.Log($"[WindowsStore] Restored native ownership for: {pair.Key}");
-                        OnPurchaseRestored?.Invoke(pair.Key);
-                        restoredCount++;
+                    int restoredCount = 0;
+                    foreach (var pair in ownedProducts)
+                    {
+                        if (pair.Value)
+                        {
+                            // 消耗型商品不需要恢复
+                            if (IsProductConsumable(pair.Key))
+                            {
+                                continue;
+                            }
+
+                            Debug.Log($"[WindowsStore] Restored native ownership for: {pair.Key}");
+                            OnPurchaseRestored?.Invoke(pair.Key);
+                            restoredCount++;
+                        }
                     }
-                }
-                Debug.Log($"[WindowsStore] Native RestorePurchases complete. Restored {restoredCount} items.");
+                    Debug.Log($"[WindowsStore] Native RestorePurchases complete. Restored {restoredCount} items.");
+                });
             }
             catch (Exception ex)
             {
-                Debug.LogError($"[WindowsStore] Native restore exception: {ex}");
+                RunOnAppThread(() =>
+                {
+                    Debug.LogError($"[WindowsStore] Native restore exception: {ex}");
+                });
             }
         }
 
@@ -212,6 +277,12 @@ namespace UnityStoreKit
         public List<WindowsStoreProductInfo> GetProductInfos()
         {
             return storeProductInfos;
+        }
+
+        private void RunOnAppThread(Action action)
+        {
+            // 将操作调度至 Unity 主线程（App 线程）上异步执行
+            UnityEngine.WSA.Application.InvokeOnAppThread(() => action(), false);
         }
 
         #region Helper Methods
@@ -227,7 +298,7 @@ namespace UnityStoreKit
                 string[] productKinds = { "Consumable", "UnmanagedConsumable" };
                 List<string> filterList = new List<string>(productKinds);
                 
-                // 获取用户已购买但未核销的商品集合
+                // 获取用户已购买但未核销 of 商品集合
                 var queryResult = await storeContext.GetUserCollectionAsync(filterList);
 
                 if (queryResult == null)
@@ -257,12 +328,12 @@ namespace UnityStoreKit
 
                     if (storeProduct.ProductKind == "UnmanagedConsumable")
                     {
-                        // 开发者托管的消耗品，未核销时默认数量为 1
+                        // 开发者托管 of 消耗品，未核销时默认数量为 1
                         quantityToFulfill = 1;
                     }
                     else if (storeProduct.ProductKind == "Consumable")
                     {
-                        // 微软托管的消耗品，查询其余额
+                        // 微软托管 of 消耗品，查询其余额
                         var balanceResult = await storeContext.GetConsumableBalanceRemainingAsync(storeId);
                         if (balanceResult != null && balanceResult.ExtendedError == null && balanceResult.Status == StoreConsumableStatus.Succeeded)
                         {
@@ -281,11 +352,14 @@ namespace UnityStoreKit
                             Debug.Log($"[WindowsStore] Recovery fulfillment status for {internalProductId}: {fulfillResult.Status}");
                             if (fulfillResult.Status == StoreConsumableStatus.Succeeded)
                             {
-                                ownedProducts[internalProductId] = false;
-                                UpdateProductOwnership(internalProductId, false);
+                                RunOnAppThread(() =>
+                                {
+                                    ownedProducts[internalProductId] = false;
+                                    UpdateProductOwnership(internalProductId, false);
 
-                                // 触发购买成功回调，让 PurchaseManager 给用户补发漏掉的道具或金币
-                                OnPurchaseSucceeded?.Invoke(internalProductId);
+                                    // 触发购买成功回调，让 PurchaseManager 给用户补发漏掉 of 道具或金币
+                                    OnPurchaseSucceeded?.Invoke(internalProductId);
+                                });
                             }
                             else
                             {
@@ -339,59 +413,7 @@ namespace UnityStoreKit
             }
         }
 
-        /// <summary>
-        /// 异步加载与该游戏关联的微软商店所有商品的价格、标题、描述、商品类别等目录元数据。
-        /// </summary>
-        private async Task LoadProductsAsync()
-        {
-            storeProductInfos.Clear();
-
-            // 需要向微软商店后台查询的所有商品类型（包含永久买断、开发人员管理型消费品、商店管理型消费品，注意：订阅商品已包含在 Durable 中）
-            string[] productKinds = { "Durable", "Consumable", "UnmanagedConsumable" };
-            List<string> filterList = new List<string>(productKinds);
-
-            Debug.Log("[WindowsStore] Fetching associated products metadata from Microsoft Store...");
-            var queryResult = await storeContext.GetAssociatedStoreProductsAsync(filterList);
-
-            if (queryResult == null)
-            {
-                Debug.LogWarning("[WindowsStore] GetAssociatedStoreProductsAsync returned null query result.");
-                return;
-            }
-
-            if (queryResult.ExtendedError != null)
-            {
-                Debug.LogError($"[WindowsStore] Catalog query failed: {queryResult.ExtendedError.Message}");
-                return;
-            }
-
-            Debug.Log($"[WindowsStore] Found {queryResult.Products.Count} associated products in Store catalog.");
-
-            foreach (var pair in queryResult.Products)
-            {
-                var storeProduct = pair.Value;
-                if (storeProduct == null) continue;
-
-                string internalId = ToInternalProductId(storeProduct.StoreId);
-                bool owned = IsPurchased(internalId);
-
-                var info = new WindowsStoreProductInfo
-                {
-                    InternalProductId = internalId,
-                    WindowsStoreProductId = storeProduct.StoreId,
-                    Title = storeProduct.Title,
-                    Description = storeProduct.Description,
-                    FormattedPrice = storeProduct.Price?.FormattedPrice ?? "N/A",
-                    IsOwned = owned,
-                    ProductKind = storeProduct.ProductKind
-                };
-
-                storeProductInfos.Add(info);
-                Debug.Log($"[WindowsStore] Catalog loaded: {info.InternalProductId} -> Title: {info.Title}, Price: {info.FormattedPrice}, Owned: {info.IsOwned}");
-            }
-
-            OnProductsLoaded?.Invoke();
-        }
+        // 已弃用：旧的商品元数据加载方法已整合进主线程调度的 Initialize 流程中
 
         private void UpdateProductOwnership(string productId, bool isOwned, DateTime expirationDate = default)
         {
@@ -419,30 +441,39 @@ namespace UnityStoreKit
                 {
                     // 传入数量参数 1U 以及跟踪标识符 trackingId，以正确匹配 Windows SDK 的 StoreContext.ReportConsumableFulfillmentAsync 签名
                     var fulfillResult = await storeContext.ReportConsumableFulfillmentAsync(windowsStoreProductId, 1U, trackingId);
-                    if (fulfillResult != null)
+                    RunOnAppThread(() =>
                     {
-                        Debug.Log($"[WindowsStore] Fulfillment status for {productId}: {fulfillResult.Status}");
-                        if (fulfillResult.Status == StoreConsumableStatus.Succeeded)
+                        if (fulfillResult != null)
                         {
-                            ownedProducts[productId] = false;
-                            UpdateProductOwnership(productId, false);
+                            Debug.Log($"[WindowsStore] Fulfillment status for {productId}: {fulfillResult.Status}");
+                            if (fulfillResult.Status == StoreConsumableStatus.Succeeded)
+                            {
+                                ownedProducts[productId] = false;
+                                UpdateProductOwnership(productId, false);
+                            }
+                            else
+                            {
+                                Debug.LogError($"[WindowsStore] Fulfillment failed for {productId}. Status: {fulfillResult.Status}, Error: {fulfillResult.ExtendedError?.Message}");
+                            }
                         }
-                        else
-                        {
-                            Debug.LogError($"[WindowsStore] Fulfillment failed for {productId}. Status: {fulfillResult.Status}, Error: {fulfillResult.ExtendedError?.Message}");
-                        }
-                    }
+                    });
                 }
                 catch (Exception ex)
                 {
-                    Debug.LogError($"[WindowsStore] Exception reporting fulfillment for {productId}: {ex}");
+                    RunOnAppThread(() =>
+                    {
+                        Debug.LogError($"[WindowsStore] Exception reporting fulfillment for {productId}: {ex}");
+                    });
                 }
             }
             else
             {
                 // Non-consumable (durable) or Store-managed
-                ownedProducts[productId] = true;
-                UpdateProductOwnership(productId, true);
+                RunOnAppThread(() =>
+                {
+                    ownedProducts[productId] = true;
+                    UpdateProductOwnership(productId, true);
+                });
             }
         }
 

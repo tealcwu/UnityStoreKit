@@ -51,20 +51,32 @@ namespace UnityStoreKit
 
         private void OnPurchaseRestored(string productId)
         {
-            // Restore persistent non-consumables (like RemoveAds)
+            // 恢复永久买断商品（去广告）
             if (productId == "removead")
             {
                 SaveLocalRemoveAdsState(true);
+                // SaveLocalRemoveAdsState 内部已触发 OnStateUpdated，此处直接 return
+                return;
             }
+
+            // 恢复订阅类商品（月订阅等）—— 状态已由 RefreshOwnedLicenses 写入 ownedProducts
+            // 此处只需触发 UI 刷新事件即可
+            Debug.Log($"[GameIAPHandler] 订阅商品 {productId} 已恢复，触发 UI 刷新。");
+            OnStateUpdated?.Invoke();
         }
 
         private void OnProductsLoaded()
         {
-            // Auto-synchronize local RemoveAds cache if initialization loads active ownership
+            // 启动初始化完成后，自动同步所有已拥有非消耗品的本地状态
+
+            // 1. 同步去广告状态到本地 PlayerPrefs 缓存
             if (PurchaseManager.Instance.IsPurchased("removead"))
             {
                 SaveLocalRemoveAdsState(true);
             }
+
+            // 2. 订阅状态已由 RefreshOwnedLicenses 写入 ownedProducts/storeProductInfos
+            //    此处只需触发 UI 刷新，让界面读取最新的 IsPurchased("monthsub") 结果
             OnStateUpdated?.Invoke();
         }
 
